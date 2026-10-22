@@ -4,10 +4,14 @@
 # 使用：按 Ctrl-R，或输入 ago [关键词]；统计报表：ago stats
 #   输入        过滤（空格分隔多个词，先按子串匹配，再按模糊匹配）
 #   ↑ ↓         选择（也可用 Ctrl-P / Ctrl-N；PgUp / PgDn 翻页）
-#   ← →         切换排序：最近 / 最远 / 最多 / 最少（也可用 Ctrl-O）
+#   ←           返回分组列表（git、pnpm…，第一项是"全部"）
+#   →           在分组列表里进入选中的组
+#   Tab         切换排序：最近 / 最远 / 最多 / 最少（Shift-Tab 反向）
+#   Ctrl-T      显示 / 隐藏最后使用时间
 #   回车        把选中的命令放到命令行，可以继续编辑，再回车执行
-#   Tab         切换到"按命令名分组"，选中某个命令名后只看这一组
 #   Esc         取消（Ctrl-G 同样）
+#
+# 排序方式和是否显示时间会保存到 ~/.config/ago/config
 #
 # 安全说明：命令文本只作为字符串处理，绝不放进 (( )) 或 eval，
 # 否则历史里的 $(...) 会被执行。
@@ -16,11 +20,12 @@
 #   AGO_KEY=...    打开搜索的快捷键（默认 ^R，即 Ctrl-R）
 #   AGO_NO_BIND=1  不绑定快捷键，只用 ago 命令
 #   NO_COLOR=1     不使用颜色
+#   AGO_CONFIG=... 偏好设置文件（默认 ${XDG_CONFIG_HOME:-~/.config}/ago/config）
 
 zmodload zsh/parameter zsh/datetime
 
 typeset -g _ago_dir=${${(%):-%x}:A:h}   # 本文件所在目录
-typeset -g _ago_version=0.2.0
+typeset -g _ago_version=0.3.0
 typeset -gi _ago_pending=0
 typeset -g _ago_initq=
 
@@ -35,7 +40,8 @@ typeset -ga _ago_most _ago_least _ago_gmost _ago_gleast
 typeset -ga _ago_sorts=(recent oldest most least)
 typeset -gA _ago_sort_label=(recent 最近 oldest 最远 most 最多 least 最少)
 typeset -g  _ago_cache_key= _ago_query= _ago_group= _ago_mode=list _ago_sort=recent
-typeset -gi _ago_sel=1 _ago_top=1 _ago_rows=10
+typeset -gi _ago_sel=1 _ago_top=1 _ago_rows=10 _ago_total=0 _ago_show_time=0
+typeset -g  _ago_conf=${AGO_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/ago/config}
 
 # 取命令名：跳过 FOO=bar、sudo 之类的前缀。结果放在 REPLY
 _ago_name() {
@@ -113,6 +119,8 @@ _ago_load() {
   _ago_sortidx _ago_counts _ago_least asc
   _ago_sortidx _ago_gcounts _ago_gmost desc
   _ago_sortidx _ago_gcounts _ago_gleast asc
+  _ago_total=0
+  for n in $_ago_counts; do (( _ago_total += n )); done
 }
 
 # 当前排序下的下标顺序，放在 reply
@@ -154,6 +162,7 @@ _ago_filter() {
       for t in $terms; do [[ ${(L)_ago_gnames[i]} == *${(b)t}* ]] || { ok=0; break }; done
       (( ok )) && _ago_hits+=($i)
     done
+    [[ -z $terms ]] && _ago_hits=(0 $_ago_hits)   # 下标 0 表示"全部"，固定在第一项
     return
   fi
 
@@ -262,7 +271,7 @@ _ago_mark() {
 }
 
 _ago_render() {
-  local -i n=$#_ago_hits i j w=$(( COLUMNS - 21 ))
+  local -i n=$#_ago_hits i j w=$(( COLUMNS - (_ago_show_time ? 21 : 11) ))
   local label=${_ago_sort_label[$_ago_sort]} cnt when name style seg line
   local -a segs
   _ago_out= _ago_rh=() _ago_base=${#BUFFER}
@@ -276,31 +285,40 @@ _ago_render() {
   _ago_put $'\n'
   _ago_put ago ${_ago_st[brand]}
   if [[ $_ago_mode == group ]]; then
-    _ago_put "  命令分组 · $n 个 · $label" ${_ago_st[dim]}
-  elif [[ -n $_ago_group ]]; then
-    _ago_put '  '
-    _ago_put "$_ago_group" ${_ago_st[sel]}
-    _ago_put " · $n 条 · $label" ${_ago_st[dim]}
+    _ago_put "  分组 · $#_ago_gnames 个 · $label" ${_ago_st[dim]}
   else
-    _ago_put "  $n/$#_ago_cmds 条 · $label" ${_ago_st[dim]}
+    _ago_put "  分组 › " ${_ago_st[dim]}
+    _ago_put "${_ago_group:-全部}" ${_ago_st[sel]}
+    if [[ -n $_ago_group ]]; then
+      _ago_put " · $n 条 · $label" ${_ago_st[dim]}
+    else
+      _ago_put " · $n/$#_ago_cmds 条 · $label" ${_ago_st[dim]}
+    fi
   fi
 
   # 列表
   for (( j = _ago_top; j < _ago_top + _ago_rows && j <= n; j++ )); do
     i=${_ago_hits[j]}
-    if [[ $_ago_mode == group ]]; then
-      cnt=${_ago_gcounts[i]}; _ago_when ${_ago_gfirst[i]}; when=$REPLY; name=${_ago_gnames[i]}
+    when=
+    if [[ $_ago_mode == group ]] && (( i == 0 )); then
+      cnt=$_ago_total; name=全部
+      (( _ago_show_time )) && { _ago_when 1; when=$REPLY }
+    elif [[ $_ago_mode == group ]]; then
+      cnt=${_ago_gcounts[i]}; name=${_ago_gnames[i]}
+      (( _ago_show_time )) && { _ago_when ${_ago_gfirst[i]}; when=$REPLY }
     else
-      cnt=${_ago_counts[i]}; _ago_when $i; when=$REPLY; name=${_ago_cmds[i]}
+      cnt=${_ago_counts[i]}; name=${_ago_cmds[i]}
+      (( _ago_show_time )) && { _ago_when $i; when=$REPLY }
     fi
+    [[ -n $when ]] && when+='  '
     _ago_fit "$name" $w; name=$REPLY
     _ago_put $'\n'
     if (( j == _ago_sel )); then
-      _ago_put "➤ ${(l:5:)cnt}  $when  " ${_ago_st[sel]}
+      _ago_put "➤ ${(l:5:)cnt}  $when" ${_ago_st[sel]}
       _ago_put "$name" ${_ago_st[sel]}
     else
       _ago_put '  '
-      _ago_put "${(l:5:)cnt}  $when  " ${_ago_st[dim]}
+      _ago_put "${(l:5:)cnt}  $when" ${_ago_st[dim]}
       _ago_put "$name"
     fi
     _ago_mark "$name" $(( _ago_base + ${#_ago_out} - ${#name} ))
@@ -312,13 +330,13 @@ _ago_render() {
 
   # 底部按键提示：随状态变化，宽度不够时在分隔符处换行
   (( n > _ago_rows )) && segs+=("$_ago_sel/$n")
-  segs+=("↑↓ 选择" "←→ 排序")
+  segs+=("↑↓ 选择")
   if [[ $_ago_mode == group ]]; then
-    segs+=("Enter 进入" "Tab 返回")
+    segs+=("→ 进入")
   else
-    segs+=("Enter 编辑" "Tab 分组")
-    [[ -n $_ago_group && -z $_ago_query ]] && segs+=("⌫ 全部")
+    segs+=("← 分组" "Enter 编辑")
   fi
+  segs+=("Tab 排序" "^T 时间")
   [[ -n $_ago_query ]] && segs+=("^U 清空")
   segs+=("Esc 退出")
   line=
@@ -343,12 +361,56 @@ _ago_cycle_sort() {
   _ago_filter
 }
 
+# → / 回车：在分组列表里进入选中的组
+_ago_enter() {
+  [[ $_ago_mode == group ]] && (( $#_ago_hits )) || return
+  local -i i=${_ago_hits[_ago_sel]}
+  if (( i == 0 )); then _ago_group=; else _ago_group=${_ago_gnames[i]}; fi
+  _ago_mode=list _ago_query=
+  _ago_filter
+}
+
+# ←：从命令列表返回分组列表，并选中刚才所在的组
+_ago_back() {
+  [[ $_ago_mode == list ]] || return
+  local g=$_ago_group
+  local -i j
+  _ago_mode=group _ago_group= _ago_query=
+  _ago_filter
+  [[ -z $g ]] && return   # 来自"全部"，它就在第一项
+  for (( j = 1; j <= $#_ago_hits; j++ )); do
+    (( _ago_hits[j] )) || continue
+    [[ ${_ago_gnames[${_ago_hits[j]}]} == "$g" ]] && { _ago_sel=j; return }
+  done
+}
+
+# 偏好设置：只按白名单读取 key=value，不会执行文件内容
+_ago_prefs_load() {
+  [[ -r $_ago_conf ]] || return 0
+  local k v
+  while IFS='=' read -r k v; do
+    case $k in
+      sort) case $v in (recent|oldest|most|least) _ago_sort=$v ;; esac ;;
+      time) case $v in (0|1) _ago_show_time=$v ;; esac ;;
+    esac
+  done < $_ago_conf
+}
+
+_ago_prefs_save() {
+  [[ -d ${_ago_conf:h} ]] || mkdir -p -- ${_ago_conf:h} 2>/dev/null || return 0
+  print -r -- "# ago 偏好设置，由 ago 自动保存
+sort=$_ago_sort
+time=$_ago_show_time" >| $_ago_conf 2>/dev/null
+}
+
 ago-widget() {
-  local saved_buffer=$BUFFER saved_pre=$PREDISPLAY key k2 k3
+  local saved_buffer=$BUFFER saved_pre=$PREDISPLAY key k2 k3 prefs
   local -i saved_cursor=$CURSOR done=0
   local -a _ago_saved_rh=("${region_highlight[@]}")
 
   _ago_load
+  _ago_prefs_load
+  prefs="$_ago_sort $_ago_show_time"
   _ago_styles
   strftime -s _ago_today '%Y%m%d' $EPOCHSECONDS
   strftime -s _ago_yesterday '%Y%m%d' $(( EPOCHSECONDS - 86400 ))
@@ -374,8 +436,9 @@ ago-widget() {
             case $k3 in
               A) (( _ago_sel-- )) ;;
               B) (( _ago_sel++ )) ;;
-              C) _ago_cycle_sort 1 ;;
-              D) _ago_cycle_sort -1 ;;
+              C) _ago_enter ;;
+              D) _ago_back ;;
+              Z) _ago_cycle_sort -1 ;;                         # Shift-Tab
               5) read -k k2; (( _ago_sel -= _ago_rows )) ;;   # PgUp
               6) read -k k2; (( _ago_sel += _ago_rows )) ;;   # PgDn
             esac
@@ -385,27 +448,17 @@ ago-widget() {
         $'\C-g') BUFFER=$saved_buffer CURSOR=$saved_cursor done=1 ;;
         $'\C-p') (( _ago_sel-- )) ;;
         $'\C-n') (( _ago_sel++ )) ;;
-        $'\C-o') _ago_cycle_sort 1 ;;
+        $'\t'|$'\C-o') _ago_cycle_sort 1 ;;
+        $'\C-t') (( _ago_show_time = ! _ago_show_time )) ;;
         $'\r'|$'\n')
           (( $#_ago_hits )) || continue
-          local -i i=${_ago_hits[_ago_sel]}
           if [[ $_ago_mode == group ]]; then
-            _ago_group=${_ago_gnames[i]} _ago_mode=list _ago_query=
-            _ago_filter
+            _ago_enter
           else
-            BUFFER=${_ago_cmds[i]} CURSOR=${#BUFFER} done=1
+            BUFFER=${_ago_cmds[${_ago_hits[_ago_sel]}]} CURSOR=${#BUFFER} done=1
           fi ;;
-        $'\t')
-          if [[ $_ago_mode == group ]]; then _ago_mode=list; else _ago_mode=group _ago_group=; fi
-          _ago_query=
-          _ago_filter ;;
         $'\C-?'|$'\C-h')
-          if [[ -n $_ago_query ]]; then
-            _ago_query=${_ago_query[1,-2]}
-          elif [[ -n $_ago_group ]]; then
-            _ago_group=
-          fi
-          _ago_filter ;;
+          [[ -n $_ago_query ]] && { _ago_query=${_ago_query[1,-2]}; _ago_filter } ;;
         $'\C-u') _ago_query= ; _ago_filter ;;
         *)
           if [[ $key == [[:print:]] ]]; then
@@ -415,6 +468,7 @@ ago-widget() {
       esac
     done
   } always {
+    [[ "$_ago_sort $_ago_show_time" == $prefs ]] || _ago_prefs_save
     POSTDISPLAY=
     PREDISPLAY=$saved_pre
     region_highlight=("${_ago_saved_rh[@]}")
@@ -445,7 +499,8 @@ ${c}ago update${r}         更新到最新版
 ${c}ago uninstall${r}      卸载
 ${c}ago version${r}        显示版本
 
-${g}搜索界面：输入 过滤 | ↑↓ 选择 | ←→ 排序 | Tab 分组 | Enter 编辑 | Esc 退出${r}"
+${g}搜索界面：输入 过滤 | ↑↓ 选择 | ← 分组 | → 进入 | Tab 排序 | ^T 时间 | Enter 编辑 | Esc 退出
+偏好设置：$_ago_conf${r}"
 }
 
 ago() {

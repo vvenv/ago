@@ -31,6 +31,7 @@ EOF
 
 HISTSIZE=1000
 fc -R $tmp/hist
+AGO_CONFIG=$tmp/conf/config   # 不碰真实的偏好设置
 source $root/ago.zsh 2>/dev/null
 
 print "加载"
@@ -70,12 +71,21 @@ _ago_query='中文'; _ago_filter; check "中文" $#_ago_hits 1
 _ago_query='*'; _ago_filter; check "通配符按普通字符处理" $#_ago_hits 0
 _ago_query='zzzz'; _ago_filter; check "无结果" $#_ago_hits 0
 
-print "分组"
+print "分组与导航"
 _ago_query=; _ago_mode=group; _ago_sort=most; _ago_filter
-check "按次数最多的分组" "${_ago_gnames[${_ago_hits[1]}]}" git
-check "分组次数" "${_ago_gcounts[${_ago_hits[1]}]}" 3
-_ago_mode=list; _ago_group=git; _ago_filter; check "只看 git 组" $#_ago_hits 2
-_ago_group=
+check "第一项固定是「全部」" "${_ago_hits[1]}" 0
+check "按次数最多的分组" "${_ago_gnames[${_ago_hits[2]}]}" git
+check "分组次数" "${_ago_gcounts[${_ago_hits[2]}]}" 3
+_ago_query=gi; _ago_filter; check "搜索分组时不显示「全部」" "${_ago_gnames[${_ago_hits[1]}]}" git
+_ago_query=; _ago_filter; _ago_sel=2; _ago_enter
+check "→ 进入 git 组" "$_ago_mode $_ago_group $#_ago_hits" "list git 2"
+_ago_back
+check "← 回到分组列表" $_ago_mode group
+check "← 后选中刚才的组" "${_ago_gnames[${_ago_hits[_ago_sel]}]}" git
+_ago_sel=1; _ago_enter
+check "→ 进入「全部」" "$_ago_mode [$_ago_group] $#_ago_hits" "list [] 8"
+_ago_back; check "从「全部」返回时选中第一项" $_ago_sel 1
+_ago_mode=list; _ago_group=; _ago_sort=recent
 
 print "界面"
 COLUMNS=60 BUFFER=git PREDISPLAY=
@@ -84,7 +94,22 @@ _ago_rows=5 _ago_query=git _ago_sort=recent; _ago_filter; _ago_render
 [[ $POSTDISPLAY == *'➤'*'git push'* ]] && ok "选中行有 ➤ 标记" || bad "选中行有 ➤ 标记" "$POSTDISPLAY"
 [[ $POSTDISPLAY == *'Esc 退出'* ]] && ok "底部有按键提示" || bad "底部有按键提示"
 [[ ${(j:|:)region_highlight} == *fg=yellow* ]] && ok "关键词高亮" || bad "关键词高亮"
+[[ $POSTDISPLAY != *个月前* ]] && ok "默认不显示时间" || bad "默认不显示时间" "$POSTDISPLAY"
+_ago_show_time=1; _ago_render
+[[ $POSTDISPLAY == *个月前* ]] && ok "打开后显示时间" || bad "打开后显示时间" "$POSTDISPLAY"
+_ago_show_time=0
 _ago_when ${_ago_cmds[(i)echo 中文命令]}; check "相对时间" "${REPLY%% *}" "1周前"
+
+print "偏好设置"
+_ago_sort=most _ago_show_time=1; _ago_prefs_save
+_ago_sort=recent _ago_show_time=0; _ago_prefs_load
+check "保存后能读回" "$_ago_sort $_ago_show_time" "most 1"
+print -r -- "sort=\$(touch $tmp/PWNED4)
+time=\`touch $tmp/PWNED5\`
+sort=bogus" > $tmp/conf/config
+_ago_sort=recent _ago_show_time=0; _ago_prefs_load
+[[ -e $tmp/PWNED4 || -e $tmp/PWNED5 ]] && bad "配置文件里的命令不会被执行" || ok "配置文件里的命令不会被执行"
+check "非法的值被忽略" "$_ago_sort $_ago_show_time" "recent 0"
 
 print "统计报表"
 out=$(zsh $root/ago-stats.zsh -f $tmp/hist -n 20 -k 3)
