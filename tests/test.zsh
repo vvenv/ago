@@ -51,46 +51,47 @@ _ago_name 'FOO=1 BAR=2 npm test'; check "跳过环境变量赋值" "$REPLY" npm
 _ago_name '/usr/local/bin/git log'; check "只取路径最后一段" "$REPLY" git
 _ago_name "PS1='a \$ '"; check "纯赋值没有命令名" "$REPLY" ""
 
-print "排序"
-first() { _ago_filter; REPLY=${_ago_cmds[${_ago_hits[1]}]} }
-_ago_query=
-_ago_sort=recent; first; check "最近" "$REPLY" "echo 中文命令"
-_ago_sort=oldest; first; check "最远" "$REPLY" "echo \$(touch $tmp/PWNED1)"
-_ago_sort=most;   first; check "最多" "$REPLY" "git status"
-_ago_sort=least;  first; check "最少（次数相同按最近）" "$REPLY" "echo 中文命令"
-_ago_sort=recent; _ago_cycle_sort 1; check "→ 切到下一个排序" $_ago_sort oldest
-_ago_sort=recent; _ago_cycle_sort -1; check "← 从第一个绕到最后" $_ago_sort least
+print "排序（总是按最近）"
+_ago_mode=list _ago_group=git _ago_query=; _ago_filter
+check "组内按最近使用" "${_ago_cmds[${_ago_hits[1]}]} | ${_ago_cmds[${_ago_hits[2]}]}" "git push | git status"
+_ago_mode=group _ago_query=; _ago_filter
+check "分组按最近使用" "${_ago_gnames[${_ago_hits[1]}]} ${_ago_gnames[${_ago_hits[2]}]}" "echo npm"
 
 print "过滤"
-_ago_sort=recent
-_ago_query='git'; _ago_filter; check "子串匹配" $#_ago_hits 2
-_ago_query='push git'; _ago_filter; check "多个词，顺序无关" "${_ago_cmds[${_ago_hits[1]}]}" "git push"
-_ago_query='GIT'; _ago_filter; check "不区分大小写" $#_ago_hits 2
-_ago_query='gps'; _ago_filter; check "模糊匹配" "${_ago_cmds[${_ago_hits[1]}]}" "git push"
-_ago_query='中文'; _ago_filter; check "中文" $#_ago_hits 1
-_ago_query='*'; _ago_filter; check "通配符按普通字符处理" $#_ago_hits 0
-_ago_query='zzzz'; _ago_filter; check "无结果" $#_ago_hits 0
+inlist() { _ago_mode=list _ago_group=$1 _ago_query=$2; _ago_filter }
+inlist git git; check "子串匹配" $#_ago_hits 2
+inlist git 'push git'; check "多个词，顺序无关" "${_ago_cmds[${_ago_hits[1]}]}" "git push"
+inlist git 'GIT'; check "不区分大小写" $#_ago_hits 2
+inlist git 'gps'; check "模糊匹配" "${_ago_cmds[${_ago_hits[1]}]}" "git push"
+inlist echo '中文'; check "中文" $#_ago_hits 1
+inlist git '*'; check "通配符按普通字符处理" $#_ago_hits 0
+inlist git 'zzzz'; check "无结果" $#_ago_hits 0
 
 print "分组与导航"
-_ago_query=; _ago_mode=group; _ago_sort=most; _ago_filter
-check "第一项固定是「全部」" "${_ago_hits[1]}" 0
-check "按次数最多的分组" "${_ago_gnames[${_ago_hits[2]}]}" git
-check "分组次数" "${_ago_gcounts[${_ago_hits[2]}]}" 3
-_ago_query=gi; _ago_filter; check "搜索分组时不显示「全部」" "${_ago_gnames[${_ago_hits[1]}]}" git
-_ago_query=; _ago_filter; _ago_sel=2; _ago_enter
+_ago_mode=group _ago_group= _ago_query=; _ago_filter
+check "打开就是分组列表，没有「全部」" "${_ago_hits[1]}" 1
+check "分组次数" "${_ago_hcounts[${_ago_hits[(i)${_ago_gidx[git]}]}]}" 3
+check "取不到命令名的归到（其他）" "${+_ago_gidx[(其他)]}" 1
+_ago_query=status; _ago_filter
+check "分组列表里搜索的是命令" "${_ago_gnames[${_ago_hits[1]}]} $#_ago_hits" "git 1"
+check "次数只算匹配的命令" "${_ago_hcounts[1]}" 2
+check "提示该组第一条匹配的命令" "${_ago_cmds[${_ago_hfirst[1]}]}" "git status"
+_ago_query=; _ago_filter
+_ago_sel=${_ago_hits[(i)${_ago_gidx[git]}]}; _ago_enter
 check "→ 进入 git 组" "$_ago_mode $_ago_group $#_ago_hits" "list git 2"
+_ago_query=push; _ago_filter
 _ago_back
 check "← 回到分组列表" $_ago_mode group
+check "← 后关键词保留" $_ago_query push
 check "← 后选中刚才的组" "${_ago_gnames[${_ago_hits[_ago_sel]}]}" git
-_ago_sel=1; _ago_enter
-check "→ 进入「全部」" "$_ago_mode [$_ago_group] $#_ago_hits" "list [] 8"
-_ago_back; check "从「全部」返回时选中第一项" $_ago_sel 1
-_ago_mode=list; _ago_group=; _ago_sort=recent
+_ago_enter
+check "带关键词进入，只列匹配的命令" "$#_ago_hits ${_ago_cmds[${_ago_hits[1]}]}" "1 git push"
+_ago_mode=group _ago_group= _ago_query=
 
 print "界面"
 COLUMNS=60 BUFFER=git PREDISPLAY=
 _ago_styles; strftime -s _ago_today '%Y%m%d' $EPOCHSECONDS
-_ago_rows=5 _ago_query=git _ago_sort=recent; _ago_filter; _ago_render
+_ago_rows=5 _ago_mode=list _ago_group=git _ago_query=git; _ago_filter; _ago_render
 [[ $POSTDISPLAY == *'➤'*'git push'* ]] && ok "选中行有 ➤ 标记" || bad "选中行有 ➤ 标记" "$POSTDISPLAY"
 [[ $POSTDISPLAY == *'Esc 退出'* ]] && ok "底部有按键提示" || bad "底部有按键提示"
 [[ ${(j:|:)region_highlight} == *fg=yellow* ]] && ok "关键词高亮" || bad "关键词高亮"
@@ -101,15 +102,15 @@ _ago_show_time=0
 _ago_when ${_ago_cmds[(i)echo 中文命令]}; check "相对时间" "${REPLY%% *}" "1周前"
 
 print "偏好设置"
-_ago_sort=most _ago_show_time=1; _ago_prefs_save
-_ago_sort=recent _ago_show_time=0; _ago_prefs_load
-check "保存后能读回" "$_ago_sort $_ago_show_time" "most 1"
-print -r -- "sort=\$(touch $tmp/PWNED4)
-time=\`touch $tmp/PWNED5\`
-sort=bogus" > $tmp/conf/config
-_ago_sort=recent _ago_show_time=0; _ago_prefs_load
+_ago_show_time=1; _ago_prefs_save
+_ago_show_time=0; _ago_prefs_load
+check "保存后能读回" $_ago_show_time 1
+print -r -- "sort=most
+time=\$(touch $tmp/PWNED4)
+time=\`touch $tmp/PWNED5\`" > $tmp/conf/config
+_ago_show_time=0; _ago_prefs_load
 [[ -e $tmp/PWNED4 || -e $tmp/PWNED5 ]] && bad "配置文件里的命令不会被执行" || ok "配置文件里的命令不会被执行"
-check "非法的值被忽略" "$_ago_sort $_ago_show_time" "recent 0"
+check "非法的值和旧的 sort 项被忽略" $_ago_show_time 0
 
 print "统计报表"
 out=$(zsh $root/ago-stats.zsh -f $tmp/hist -n 20 -k 3)
