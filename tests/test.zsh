@@ -74,7 +74,8 @@ check "打开就是分组列表，没有「全部」" "${_ago_hits[1]}" 1
 check "分组次数" "${_ago_hcounts[${_ago_hits[(i)${_ago_gidx[git]}]}]}" 3
 check "取不到命令名的归到（其他）" "${+_ago_gidx[(其他)]}" 1
 _ago_query=status; _ago_filter
-check "分组列表里搜索的是命令" "${_ago_gnames[${_ago_hits[1]}]} $#_ago_hits" "git 1"
+# 只看第一项：子串匹配排在前面；临时目录名是随机的，可能被模糊匹配到，不能断言总数
+check "分组列表里搜索的是命令" "${_ago_gnames[${_ago_hits[1]}]}" "git"
 check "次数只算匹配的命令" "${_ago_hcounts[1]}" 2
 check "提示该组第一条匹配的命令" "${_ago_cmds[${_ago_hfirst[1]}]}" "git status"
 _ago_query=; _ago_filter
