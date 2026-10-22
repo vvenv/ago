@@ -92,7 +92,7 @@ _ago_mode=group _ago_group= _ago_query=
 
 print "界面"
 COLUMNS=60 BUFFER=git PREDISPLAY=
-_ago_styles; strftime -s _ago_today '%Y%m%d' $EPOCHSECONDS
+_ago_styles; strftime -s _ago_yesterday '%Y%m%d' $(( EPOCHSECONDS - 86400 ))
 _ago_rows=5 _ago_mode=list _ago_group=git _ago_query=git; _ago_filter; _ago_render
 [[ $POSTDISPLAY == *'➤'*'git push'* ]] && ok "选中行有 ➤ 标记" || bad "选中行有 ➤ 标记" "$POSTDISPLAY"
 [[ $POSTDISPLAY == *'esc 退出'* ]] && ok "底部有按键提示" || bad "底部有按键提示"
@@ -112,6 +112,12 @@ _ago_show_time=1; _ago_render
 [[ ${${(f)POSTDISPLAY}[2]} == '➤     1  '*个月前*'git push' ]] && ok "次数和时间可以同时显示" || bad "次数和时间可以同时显示" "${${(f)POSTDISPLAY}[2]}"
 _ago_show_time=0 _ago_show_count=0
 _ago_when ${_ago_cmds[(i)echo 中文命令]}; check "相对时间" "${REPLY%% *}" "1周前"
+rel() { _ago_reltime $(( EPOCHSECONDS - $1 )); print -r -- $REPLY }
+check "1 分钟内显示秒" "$(rel 5) $(rel 59)" "5秒前 59秒前"
+check "1 小时内显示分钟" "$(rel 60) $(rel 3599)" "1分钟前 59分钟前"
+check "24 小时内显示小时" "$(rel 3600) $(rel 86399)" "1小时前 23小时前"
+check "超过 24 小时按天算" "$(rel $(( 3 * 86400 )))" "3天前"
+check "未来的时间（时钟误差）显示 1 秒前" "$(rel -30)" "1秒前"
 
 print "偏好设置"
 _ago_show_time=1 _ago_show_count=1; _ago_prefs_save

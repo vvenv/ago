@@ -26,7 +26,7 @@
 zmodload zsh/parameter zsh/datetime
 
 typeset -g _ago_dir=${${(%):-%x}:A:h}   # 本文件所在目录
-typeset -g _ago_version=0.6.0
+typeset -g _ago_version=0.6.1
 typeset -gi _ago_pending=0
 typeset -g _ago_initq=
 
@@ -40,7 +40,7 @@ typeset -ga _ago_hits _ago_hcounts _ago_hfirst
 typeset -gA _ago_tmap   # 事件号 → 时间戳，懒加载缓存
 typeset -gA _ago_st     # 界面样式
 typeset -ga _ago_terms _ago_rh
-typeset -g  _ago_out= _ago_today= _ago_yesterday=
+typeset -g  _ago_out= _ago_yesterday=
 typeset -gi _ago_base=0
 typeset -g  _ago_cache_key= _ago_query= _ago_group= _ago_mode=group
 typeset -gi _ago_sel=1 _ago_top=1 _ago_rows=10 _ago_show_time=0 _ago_show_count=0
@@ -177,11 +177,31 @@ _ago_fit() {
   REPLY=$s
 }
 
-# 第 $1 条命令最后一次使用的相对时间（今天 / 3天前 / 2个月前），放在 REPLY，补齐到 8 列。
+# 时间戳 $1 距现在的相对时间，放在 REPLY：
+# 1 分钟内"N秒前"，1 小时内"N分钟前"，24 小时内"N小时前"，再往前是昨天 / N天前 / N周前 / N个月前 / N年前
+_ago_reltime() {
+  local -i t=$1 s d
+  local day
+  s=$(( EPOCHSECONDS - t ))
+  (( s < 1 )) && s=1   # 时钟误差导致的未来时间也算 1 秒前
+  d=$(( s / 86400 ))
+  strftime -s day '%Y%m%d' $t
+  if   (( s < 60 ));    then REPLY="${s}秒前"
+  elif (( s < 3600 ));  then REPLY="$(( s / 60 ))分钟前"
+  elif (( s < 86400 )); then REPLY="$(( s / 3600 ))小时前"
+  elif [[ $day == $_ago_yesterday ]]; then REPLY=昨天
+  elif (( d < 7 ));   then REPLY="$(( d > 1 ? d : 2 ))天前"
+  elif (( d < 30 ));  then REPLY="$(( d / 7 ))周前"
+  elif (( d < 365 )); then REPLY="$(( d / 30 ))个月前"
+  else                     REPLY="$(( d / 365 ))年前"
+  fi
+}
+
+# 第 $1 条命令最后一次使用的相对时间，放在 REPLY，补齐到 8 列。
 # 只查屏幕上显示的行，查过就缓存
 _ago_when() {
-  local -i e=${_ago_evts[$1]} t d
-  local line day
+  local -i e=${_ago_evts[$1]} t
+  local line
   local -a w
   if [[ -z ${_ago_tmap[$e]} ]]; then
     line="$(fc -lt '%s' $e $e 2>/dev/null)"
@@ -190,19 +210,7 @@ _ago_when() {
     [[ ${w[2]} == <-> ]] && _ago_tmap[$e]=${w[2]} || _ago_tmap[$e]=0
   fi
   t=${_ago_tmap[$e]}
-  if (( t == 0 )); then
-    REPLY=
-  else
-    strftime -s day '%Y%m%d' $t
-    d=$(( (EPOCHSECONDS - t) / 86400 ))
-    if   [[ $day == $_ago_today ]];     then REPLY=今天
-    elif [[ $day == $_ago_yesterday ]]; then REPLY=昨天
-    elif (( d < 7 ));   then REPLY="$(( d > 1 ? d : 2 ))天前"
-    elif (( d < 30 ));  then REPLY="$(( d / 7 ))周前"
-    elif (( d < 365 )); then REPLY="$(( d / 30 ))个月前"
-    else                     REPLY="$(( d / 365 ))年前"
-    fi
-  fi
+  if (( t == 0 )); then REPLY=; else _ago_reltime $t; fi
   while (( ${(m)#REPLY} < 8 )); do REPLY+=' '; done
 }
 
@@ -528,7 +536,6 @@ ago-widget() {
   _ago_prefs_load
   saved_prefs="$_ago_show_time $_ago_show_count"
   _ago_styles
-  strftime -s _ago_today '%Y%m%d' $EPOCHSECONDS
   strftime -s _ago_yesterday '%Y%m%d' $(( EPOCHSECONDS - 86400 ))
   _ago_query=${_ago_initq:-$BUFFER} _ago_group= _ago_mode=group _ago_ask= _ago_msg= _ago_del=()
   _ago_initq=
