@@ -26,7 +26,7 @@
 zmodload zsh/parameter zsh/datetime
 
 typeset -g _ago_dir=${${(%):-%x}:A:h}   # 本文件所在目录
-typeset -g _ago_version=0.6.1
+typeset -g _ago_version=0.6.2
 typeset -gi _ago_pending=0
 typeset -g _ago_initq=
 
