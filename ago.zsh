@@ -9,6 +9,7 @@
 #   → / 回车    进入选中的组
 #   ←           返回分组列表
 #   回车        在组里：把选中的命令放到命令行，可以继续编辑，再回车执行
+#   退格 / Del  删除选中的命令或整组（关键词为空时用退格；需要按 y 确认）
 #   Ctrl-T      显示 / 隐藏最后使用时间（会保存到 ~/.config/ago/config）
 #   Esc         取消（Ctrl-G 同样）
 #
@@ -24,7 +25,7 @@
 zmodload zsh/parameter zsh/datetime
 
 typeset -g _ago_dir=${${(%):-%x}:A:h}   # 本文件所在目录
-typeset -g _ago_version=0.4.0
+typeset -g _ago_version=0.5.0
 typeset -gi _ago_pending=0
 typeset -g _ago_initq=
 
@@ -44,6 +45,8 @@ typeset -g  _ago_cache_key= _ago_query= _ago_group= _ago_mode=group
 typeset -gi _ago_sel=1 _ago_top=1 _ago_rows=10 _ago_show_time=0
 typeset -g  _ago_conf=${AGO_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/ago/config}
 typeset -g  _ago_other='(其他)'   # 取不到命令名的历史归到这一组
+typeset -ga _ago_del          # 等待确认删除的命令
+typeset -g  _ago_ask= _ago_msg= _ago_msg_style=   # 确认提示 / 操作结果提示
 
 # 取命令名：跳过 FOO=bar、sudo 之类的前缀。结果放在 REPLY
 _ago_name() {
@@ -54,7 +57,7 @@ _ago_name() {
     [[ $x == [A-Za-z_]*=* ]] && continue
     [[ $x == (sudo|time|nohup|env|exec|command|builtin|noglob|nice) ]] && { prefixed=1; continue }
     (( prefixed )) && [[ $x == -* ]] && continue
-    REPLY=${x:t}
+    REPLY=${${x:t}%%[;|&]*}   # 去掉紧跟的 ; | &，例如 "clear;" → clear
     # 只接受像命令名的词，排除引号、括号等碎片
     [[ $REPLY == [A-Za-z0-9_.~+@]* && $REPLY != *[\'\"\(\)\$\`]* ]] || REPLY=
     return
@@ -205,9 +208,10 @@ _ago_when() {
 # 颜色。设置 NO_COLOR 时只用反色和下划线
 _ago_styles() {
   if [[ -n $NO_COLOR ]]; then
-    _ago_st=(brand bold dim '' sel standout match underline prompt bold)
+    _ago_st=(brand bold dim '' sel standout match underline prompt bold warn 'bold,underline' ok bold)
   else
-    _ago_st=(brand 'fg=magenta,bold' dim 'fg=8' sel 'fg=cyan,bold' match 'fg=yellow,bold' prompt 'fg=yellow')
+    _ago_st=(brand 'fg=magenta,bold' dim 'fg=8' sel 'fg=cyan,bold' match 'fg=yellow,bold' prompt 'fg=yellow'
+             warn 'fg=red,bold' ok 'fg=green')
   fi
 }
 
@@ -244,7 +248,7 @@ _ago_mark() {
 
 _ago_render() {
   local -i n=$#_ago_hits i j f w=$(( COLUMNS - (_ago_show_time ? 21 : 11) )) gw=0
-  local cnt when name hint seg line
+  local cnt when name hint seg line style
   local -a segs
   _ago_out= _ago_rh=() _ago_base=${#BUFFER}
 
@@ -257,11 +261,11 @@ _ago_render() {
   _ago_put $'\n'
   _ago_put ago ${_ago_st[brand]}
   if [[ $_ago_mode == group ]]; then
-    _ago_put "  分组 · $n 个" ${_ago_st[dim]}
+    _ago_put "  $n" ${_ago_st[dim]}
   else
-    _ago_put "  分组 › " ${_ago_st[dim]}
+    _ago_put '  '
     _ago_put "$_ago_group" ${_ago_st[sel]}
-    _ago_put " · $n 条" ${_ago_st[dim]}
+    _ago_put " · $n" ${_ago_st[dim]}
   fi
 
   # 分组列表里有关键词时，命令提示对齐成一列（组名最多按 16 列算）
@@ -292,8 +296,10 @@ _ago_render() {
     if (( _ago_show_time )); then _ago_when $f; when="$REPLY  "; fi
     _ago_put $'\n'
     if (( j == _ago_sel )); then
-      _ago_put "➤ ${(l:5:)cnt}  $when" ${_ago_st[sel]}
-      _ago_put "$name" ${_ago_st[sel]}
+      style=${_ago_st[sel]}
+      [[ -n $_ago_ask ]] && style=${_ago_st[warn]}
+      _ago_put "➤ ${(l:5:)cnt}  $when" $style
+      _ago_put "$name" $style
     else
       _ago_put '  '
       _ago_put "${(l:5:)cnt}  $when" ${_ago_st[dim]}
@@ -310,17 +316,28 @@ _ago_render() {
     _ago_put "  没有匹配的命令" ${_ago_st[dim]}
   fi
 
-  # 底部按键提示：随状态变化，宽度不够时在分隔符处换行
-  (( n > _ago_rows )) && segs+=("$_ago_sel/$n")
-  segs+=("↑↓ 选择")
-  if [[ $_ago_mode == group ]]; then
-    segs+=("→ 进入")
+  # 底部：确认删除 / 操作结果 / 按键提示（随状态变化，宽度不够时在分隔符处换行）
+  if [[ -n $_ago_ask ]]; then
+    _ago_fit "$_ago_ask" $(( COLUMNS - 1 ))
+    _ago_put $'\n'; _ago_put "$REPLY" ${_ago_st[warn]}
+    segs=("y 确认删除" "其它键取消")
   else
-    segs+=("← 返回" "Enter 编辑")
+    if [[ -n $_ago_msg ]]; then
+      _ago_fit "$_ago_msg" $(( COLUMNS - 1 ))
+      _ago_put $'\n'; _ago_put "$REPLY" ${_ago_st[$_ago_msg_style]}
+    fi
+    (( n > _ago_rows )) && segs+=("$_ago_sel/$n")
+    segs+=("↑↓ 选择")
+    if [[ $_ago_mode == group ]]; then
+      segs+=("→ 进入")
+    else
+      segs+=("← 返回" "Enter 编辑")
+    fi
+    (( n )) && segs+=("${${_ago_query:+Del}:-⌫} 删除")
+    segs+=("^T 时间")
+    [[ -n $_ago_query ]] && segs+=("^U 清空")
+    segs+=("Esc 退出")
   fi
-  segs+=("^T 时间")
-  [[ -n $_ago_query ]] && segs+=("^U 清空")
-  segs+=("Esc 退出")
   line=
   for seg in $segs; do
     if [[ -n $line ]] && (( ${(m)#line} + 3 + ${(m)#seg} > COLUMNS - 1 )); then
@@ -355,6 +372,128 @@ _ago_back() {
   done
 }
 
+# 准备删除选中的行：在组里是这条命令，在分组列表里是整组（有关键词时只算匹配的命令）。
+# 要删的命令放进 _ago_del，确认提示放进 _ago_ask
+_ago_ask_delete() {
+  (( $#_ago_hits )) || return
+  local -i i=${_ago_hits[_ago_sel]} total=0 sel=$_ago_sel
+  local g
+  _ago_del=()
+  if [[ $_ago_mode == list ]]; then
+    _ago_del=("${_ago_cmds[i]}")
+    _ago_fit "${_ago_cmds[i]}" 40
+    _ago_ask="删除「$REPLY」的全部 ${_ago_counts[i]} 条历史？"
+    return
+  fi
+  g=${_ago_gnames[i]}
+  # 借用命令列表的过滤，取出这一组里（匹配的）命令
+  _ago_mode=list _ago_group=$g
+  _ago_filter
+  for i in $_ago_hits; do
+    _ago_del+=("${_ago_cmds[i]}")
+    (( total += _ago_counts[i] ))
+  done
+  _ago_mode=group _ago_group=
+  _ago_filter
+  _ago_sel=sel
+  if [[ -n $_ago_terms ]]; then
+    _ago_ask="删除 $g 组中匹配的 $#_ago_del 条命令（共 $total 条历史）？"
+  else
+    _ago_ask="删除 $g 整组 $#_ago_del 条命令（共 $total 条历史）？"
+  fi
+}
+
+# 从历史里删除参数中的命令（每条的所有出现），同时更新历史文件和当前 shell 的历史。
+# 做法：先把还没保存的历史写进 $HISTFILE；把文件按记录拆开（原样保留字节，不碰 zsh 对
+# 非 ASCII 字符的内部编码）；再用一个临时的独立历史列表读这些记录，得到每条记录的命令文本，
+# 据此决定删除哪些记录；写回文件，最后重新载入当前 shell 的历史。
+# zsh 会把最后读入的一条当作"当前行"而不放进 $history，所以读的时候在末尾多放一条哨兵。
+# 写回前先备份到 $HISTFILE.ago-bak。成功时 REPLY 是删除的条数；失败时什么都不改，REPLY 是原因
+_ago_hist_delete() {
+  local f=$HISTFILE tmp=${TMPDIR:-/tmp}/ago-hist.$$.$RANDOM line cur text body t
+  local -A del
+  local -a raw recs keep texts
+  local -i cont=0 R i removed=0 hs n0
+  for text in "$@"; do del[$text]=1; done
+
+  [[ -n $f ]] || { REPLY="没有设置 HISTFILE，无法删除"; return 1 }
+  [[ -w $f ]] || { REPLY="无法写入 $f"; return 1 }
+  fc -AI $f 2>/dev/null   # 把内存里还没保存的历史先写进文件
+
+  # 拆成记录：和 zsh 读历史的规则一样，以反斜杠结尾的行和下一行属于同一条
+  raw=("${(@f)$(<$f)}")
+  for line in "${raw[@]}"; do
+    if (( cont )); then cur+=$'\n'$line; else cur=$line; fi
+    if [[ $line == *\\ ]]; then cont=1; else cont=0; recs+=("$cur"); fi
+  done
+  (( cont )) && recs+=("$cur")
+  R=$#recs
+  (( R )) || { REPLY="历史文件是空的"; return 1 }
+
+  # 用独立的历史列表读这些记录（末尾加哨兵）；读的时候关掉会丢记录的去重选项
+  print -r -l -- "${recs[@]}" ': 0:0;__ago_sentinel__' >| $tmp.in || { REPLY="无法写临时文件"; return 1 }
+  fc -p $tmp $(( R + 10 )) $(( R + 10 ))
+  {
+    setopt localoptions nohistignoredups nohistignorealldups nohistsavenodups
+    fc -R $tmp.in
+    for i in ${(onk)history}; do texts+=("${history[$i]}"); done
+  } always {
+    fc -P
+    command rm -f -- $tmp $tmp.in
+  }
+  [[ ${texts[-1]} == __ago_sentinel__ ]] && shift -p texts
+  (( $#texts == R )) || { REPLY="历史条数对不上（$#texts/$R），没有删除"; return 1 }
+
+  for (( i = 1; i <= R; i++ )); do
+    text=${texts[i]}
+    # 纯 ASCII 的记录逐条核对，确认记录和命令是对齐的
+    if [[ $text != *[^[:ascii:]]* ]]; then
+      body=${recs[i]}
+      body=${body#: <->:<->;}
+      body=${body//$'\\\n'/$'\n'}
+      t=$text
+      while [[ $body == *[[:space:]] ]]; do body=${body[1,-2]}; done   # zsh 读入时会去掉末尾空白
+      while [[ $t == *[[:space:]] ]]; do t=${t[1,-2]}; done
+      [[ $body == "$t" ]] || { REPLY="历史文件和预期不一致，没有删除"; return 1 }
+    fi
+    if [[ -n ${del[$text]} ]]; then (( removed++ )); else keep+=("${recs[i]}"); fi
+  done
+  (( removed )) || { REPLY="没有找到要删除的记录"; return 1 }
+
+  command cp -p -- $f $f.ago-bak 2>/dev/null
+  if (( $#keep )); then print -r -l -- "${keep[@]}" >| $f; else : >| $f; fi || { REPLY="无法写入 $f"; return 1 }
+
+  # 清空当前 shell 的历史，再从文件重新载入。
+  # HISTSIZE=0 会留下最近的一条；重新载入后它是最旧的一条，再临时缩小 HISTSIZE 把它挤掉
+  hs=$HISTSIZE
+  HISTSIZE=0
+  n0=${#history}
+  HISTSIZE=$hs
+  fc -R $f
+  if (( n0 && ${#history} > n0 )); then
+    HISTSIZE=$(( ${#history} - n0 ))
+    HISTSIZE=$hs
+  fi
+  REPLY=$removed
+}
+
+# 确认后执行删除，并刷新列表
+_ago_do_delete() {
+  local -i sel=$_ago_sel
+  if _ago_hist_delete "${_ago_del[@]}"; then
+    _ago_msg="已删除 $REPLY 条历史${HISTFILE:+（备份：${HISTFILE/#$HOME/~}.ago-bak）}" _ago_msg_style=ok
+  else
+    _ago_msg=$REPLY _ago_msg_style=warn
+  fi
+  _ago_del=() _ago_ask=
+  _ago_cache_key= _ago_tmap=()   # 事件号变了，缓存全部作废
+  _ago_load
+  _ago_filter
+  # 组里的命令删光了就回到分组列表
+  [[ $_ago_mode == list ]] && (( ! $#_ago_hits )) && _ago_back
+  (( _ago_sel = sel ))
+}
+
 # 偏好设置：只按白名单读取 key=value，不会执行文件内容
 _ago_prefs_load() {
   [[ -r $_ago_conf ]] || return 0
@@ -383,7 +522,7 @@ ago-widget() {
   _ago_styles
   strftime -s _ago_today '%Y%m%d' $EPOCHSECONDS
   strftime -s _ago_yesterday '%Y%m%d' $(( EPOCHSECONDS - 86400 ))
-  _ago_query=${_ago_initq:-$BUFFER} _ago_group= _ago_mode=group
+  _ago_query=${_ago_initq:-$BUFFER} _ago_group= _ago_mode=group _ago_ask= _ago_msg= _ago_del=()
   _ago_initq=
   _ago_rows=$(( LINES / 2 - 3 ))
   (( _ago_rows > 10 )) && _ago_rows=10
@@ -398,6 +537,18 @@ ago-widget() {
       _ago_render
       zle -R
       read -k key || break
+      _ago_msg=
+      # 等待确认删除：y 或回车确认，其它任何键取消（方向键之类的整段吃掉，不当作输入）
+      if [[ -n $_ago_ask ]]; then
+        if [[ $key == (y|Y|$'\r'|$'\n') ]]; then
+          _ago_do_delete
+        else
+          [[ $key == $'\e' ]] && while read -t 0.05 -k k2; do :; done
+          _ago_ask= _ago_del=()
+          _ago_msg="已取消" _ago_msg_style=dim
+        fi
+        continue
+      fi
       case $key in
         $'\e')
           if read -t 0.05 -k k2 && [[ $k2 == ('['|O) ]]; then
@@ -407,6 +558,7 @@ ago-widget() {
               B) (( _ago_sel++ )) ;;
               C) _ago_enter ;;
               D) _ago_back ;;
+              3) read -k k2; _ago_ask_delete ;;                # Delete
               5) read -k k2; (( _ago_sel -= _ago_rows )) ;;   # PgUp
               6) read -k k2; (( _ago_sel += _ago_rows )) ;;   # PgDn
             esac
@@ -425,7 +577,12 @@ ago-widget() {
             BUFFER=${_ago_cmds[${_ago_hits[_ago_sel]}]} CURSOR=${#BUFFER} done=1
           fi ;;
         $'\C-?'|$'\C-h')
-          [[ -n $_ago_query ]] && { _ago_query=${_ago_query[1,-2]}; _ago_filter } ;;
+          if [[ -n $_ago_query ]]; then
+            _ago_query=${_ago_query[1,-2]}
+            _ago_filter
+          else
+            _ago_ask_delete
+          fi ;;
         $'\C-u') _ago_query= ; _ago_filter ;;
         *)
           if [[ $key == [[:print:]] ]]; then
@@ -466,7 +623,7 @@ ${c}ago update${r}         更新到最新版
 ${c}ago uninstall${r}      卸载
 ${c}ago version${r}        显示版本
 
-${g}搜索界面：输入 搜索 | ↑↓ 选择 | → 进入组 | ← 返回 | Enter 编辑 | ^T 时间 | Esc 退出
+${g}搜索界面：输入 搜索 | ↑↓ 选择 | → 进入组 | ← 返回 | Enter 编辑 | ⌫/Del 删除 | ^T 时间 | Esc 退出
 偏好设置：$_ago_conf${r}"
 }
 

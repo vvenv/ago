@@ -49,6 +49,7 @@ print "命令名"
 _ago_name 'sudo -E pnpm dev'; check "跳过 sudo 和它的参数" "$REPLY" pnpm
 _ago_name 'FOO=1 BAR=2 npm test'; check "跳过环境变量赋值" "$REPLY" npm
 _ago_name '/usr/local/bin/git log'; check "只取路径最后一段" "$REPLY" git
+_ago_name 'clear; ls'; check "去掉紧跟的分号" "$REPLY" clear
 _ago_name "PS1='a \$ '"; check "纯赋值没有命令名" "$REPLY" ""
 
 print "排序（总是按最近）"
@@ -94,6 +95,8 @@ _ago_styles; strftime -s _ago_today '%Y%m%d' $EPOCHSECONDS
 _ago_rows=5 _ago_mode=list _ago_group=git _ago_query=git; _ago_filter; _ago_render
 [[ $POSTDISPLAY == *'➤'*'git push'* ]] && ok "选中行有 ➤ 标记" || bad "选中行有 ➤ 标记" "$POSTDISPLAY"
 [[ $POSTDISPLAY == *'Esc 退出'* ]] && ok "底部有按键提示" || bad "底部有按键提示"
+title=${${(f)POSTDISPLAY}[1]}
+[[ $title == ago*git*' · '<-> && $title != *(分组|条|个)* ]] && ok "标题只有组名和数量" || bad "标题只有组名和数量" "$title"
 [[ ${(j:|:)region_highlight} == *fg=yellow* ]] && ok "关键词高亮" || bad "关键词高亮"
 [[ $POSTDISPLAY != *个月前* ]] && ok "默认不显示时间" || bad "默认不显示时间" "$POSTDISPLAY"
 _ago_show_time=1; _ago_render
@@ -111,6 +114,38 @@ time=\`touch $tmp/PWNED5\`" > $tmp/conf/config
 _ago_show_time=0; _ago_prefs_load
 [[ -e $tmp/PWNED4 || -e $tmp/PWNED5 ]] && bad "配置文件里的命令不会被执行" || ok "配置文件里的命令不会被执行"
 check "非法的值和旧的 sort 项被忽略" $_ago_show_time 0
+
+print "删除确认"
+_ago_mode=list _ago_group=git _ago_query=; _ago_filter; _ago_sel=1
+_ago_ask_delete
+check "组里删除一条命令" "${#_ago_del} ${_ago_del[1]}" "1 git push"
+[[ $_ago_ask == *"git push"*"1 条历史"* ]] && ok "确认提示写明命令和条数" || bad "确认提示写明命令和条数" "$_ago_ask"
+COLUMNS=80; _ago_render
+[[ $POSTDISPLAY == *'y 确认删除'* ]] && ok "确认时底部显示 y 确认删除" || bad "确认时底部显示 y 确认删除" "$POSTDISPLAY"
+[[ ${(j:|:)region_highlight} == *fg=red* ]] && ok "确认时用红色提示" || bad "确认时用红色提示"
+_ago_ask= _ago_del=()
+_ago_mode=group _ago_group= _ago_query=; _ago_filter
+_ago_sel=${_ago_hits[(i)${_ago_gidx[git]}]}; _ago_ask_delete
+check "分组列表里删除整组" "${#_ago_del} ${(j:,:)${(@o)_ago_del}}" "2 git push,git status"
+[[ $_ago_ask == *"git 整组 2 条命令"*"3 条历史"* ]] && ok "整组确认提示" || bad "整组确认提示" "$_ago_ask"
+check "确认前不改变选中项" "${_ago_gnames[${_ago_hits[_ago_sel]}]}" git
+_ago_query=status; _ago_filter; _ago_sel=1; _ago_ask_delete
+check "有关键词时只删匹配的命令" "${(j:,:)_ago_del}" "git status"
+[[ $_ago_ask == *"匹配的 1 条命令"* ]] && ok "有关键词时提示「匹配的」" || bad "有关键词时提示「匹配的」" "$_ago_ask"
+_ago_ask= _ago_del=() _ago_query=; _ago_filter
+
+print "删除历史（在交互 shell 里运行）"
+if (( $+commands[python3] )); then
+  mkdir -p $tmp/dp
+  for line in "${(@f)$(python3 -I $root/tests/delete_pty.py $root $tmp/dp)}"; do
+    case $line in
+      ok\ *)  ok "${line#ok }" ;;
+      bad\ *) bad "${line#bad }" ;;
+    esac
+  done
+else
+  print "  - 没有 python3，跳过"
+fi
 
 print "统计报表"
 out=$(zsh $root/ago-stats.zsh -f $tmp/hist -n 20 -k 3)
