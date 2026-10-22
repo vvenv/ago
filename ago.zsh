@@ -11,7 +11,7 @@
 #   回车        在组里：把选中的命令放到命令行，可以继续编辑，再回车执行
 #   退格 / Del  删除选中的命令或整组（关键词为空时用退格；需要按 y 确认）
 #   Ctrl-T      显示 / 隐藏最后使用时间（会保存到 ~/.config/ago/config）
-#   Esc         取消（Ctrl-G 同样）
+#   esc         取消（Ctrl-G 同样）
 #
 # 安全说明：命令文本只作为字符串处理，绝不放进 (( )) 或 eval，
 # 否则历史里的 $(...) 会被执行。
@@ -336,7 +336,7 @@ _ago_render() {
     (( n )) && segs+=("${${_ago_query:+Del}:-⌫} 删除")
     segs+=("^T 时间")
     [[ -n $_ago_query ]] && segs+=("^U 清空")
-    segs+=("Esc 退出")
+    segs+=("esc 退出")
   fi
   line=
   for seg in $segs; do
@@ -623,7 +623,7 @@ ${c}ago update${r}         更新到最新版
 ${c}ago uninstall${r}      卸载
 ${c}ago version${r}        显示版本
 
-${g}搜索界面：输入 搜索 | ↑↓ 选择 | → 进入组 | ← 返回 | Enter 编辑 | ⌫/Del 删除 | ^T 时间 | Esc 退出
+${g}搜索界面：输入 搜索 | ↑↓ 选择 | → 进入组 | ← 返回 | Enter 编辑 | ⌫/Del 删除 | ^T 时间 | esc 退出
 偏好设置：$_ago_conf${r}"
 }
 
@@ -659,7 +659,7 @@ ago() {
   esac
 }
 
-# Tab 补全子命令
+# tab 补全子命令
 _ago_complete() {
   local -a subs=(
     'stats:最常用命令统计'

@@ -94,7 +94,7 @@ COLUMNS=60 BUFFER=git PREDISPLAY=
 _ago_styles; strftime -s _ago_today '%Y%m%d' $EPOCHSECONDS
 _ago_rows=5 _ago_mode=list _ago_group=git _ago_query=git; _ago_filter; _ago_render
 [[ $POSTDISPLAY == *'➤'*'git push'* ]] && ok "选中行有 ➤ 标记" || bad "选中行有 ➤ 标记" "$POSTDISPLAY"
-[[ $POSTDISPLAY == *'Esc 退出'* ]] && ok "底部有按键提示" || bad "底部有按键提示"
+[[ $POSTDISPLAY == *'esc 退出'* ]] && ok "底部有按键提示" || bad "底部有按键提示"
 title=${${(f)POSTDISPLAY}[1]}
 [[ $title == ago*git*' · '<-> && $title != *(分组|条|个)* ]] && ok "标题只有组名和数量" || bad "标题只有组名和数量" "$title"
 [[ ${(j:|:)region_highlight} == *fg=yellow* ]] && ok "关键词高亮" || bad "关键词高亮"

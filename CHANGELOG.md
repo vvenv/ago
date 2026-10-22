@@ -21,7 +21,7 @@
 
 - 时间列默认隐藏，按 Ctrl-T 显示 / 隐藏
 - 方向键导航：← 返回分组列表，→ 进入选中的组；分组列表第一项固定为「全部」
-- Tab / Shift-Tab 切换排序（原来是 ←→）
+- tab / Shift-tab 切换排序（原来是 ←→）
 - 自动保存偏好（排序方式、是否显示时间）到 `~/.config/ago/config`，按白名单读取，不执行文件内容
 
 ## 0.2.0
@@ -30,7 +30,7 @@
 - 日期改为相对时间（今天 / 3天前 / 2个月前）
 - 底部按键提示随状态变化，窗口窄时自动换行
 - 支持 PgUp / PgDn 翻页，支持 `NO_COLOR`
-- 新增 `ago update`、`ago uninstall` 和子命令 Tab 补全
+- 新增 `ago update`、`ago uninstall` 和子命令 tab 补全
 - 新增测试和 GitHub Actions（macOS / Ubuntu）
 
 ## 0.1.0
