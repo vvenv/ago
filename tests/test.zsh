@@ -102,18 +102,27 @@ title=${${(f)POSTDISPLAY}[1]}
 _ago_show_time=1; _ago_render
 [[ $POSTDISPLAY == *个月前* ]] && ok "打开后显示时间" || bad "打开后显示时间" "$POSTDISPLAY"
 _ago_show_time=0
+_ago_render
+[[ ${${(f)POSTDISPLAY}[2]} == '➤ git push' ]] && ok "默认不显示次数" || bad "默认不显示次数" "${${(f)POSTDISPLAY}[2]}"
+[[ $POSTDISPLAY == *'^O 次数'* ]] && ok "底部提示 ^O 次数" || bad "底部提示 ^O 次数"
+_ago_show_count=1; _ago_render
+[[ ${${(f)POSTDISPLAY}[2]} == '➤     1  git push' ]] && ok "打开后显示次数" || bad "打开后显示次数" "${${(f)POSTDISPLAY}[2]}"
+_ago_show_time=1; _ago_render
+[[ ${${(f)POSTDISPLAY}[2]} == '➤     1  '*个月前*'git push' ]] && ok "次数和时间可以同时显示" || bad "次数和时间可以同时显示" "${${(f)POSTDISPLAY}[2]}"
+_ago_show_time=0 _ago_show_count=0
 _ago_when ${_ago_cmds[(i)echo 中文命令]}; check "相对时间" "${REPLY%% *}" "1周前"
 
 print "偏好设置"
-_ago_show_time=1; _ago_prefs_save
-_ago_show_time=0; _ago_prefs_load
-check "保存后能读回" $_ago_show_time 1
+_ago_show_time=1 _ago_show_count=1; _ago_prefs_save
+_ago_show_time=0 _ago_show_count=0; _ago_prefs_load
+check "保存后能读回" "$_ago_show_time $_ago_show_count" "1 1"
 print -r -- "sort=most
 time=\$(touch $tmp/PWNED4)
-time=\`touch $tmp/PWNED5\`" > $tmp/conf/config
-_ago_show_time=0; _ago_prefs_load
+time=\`touch $tmp/PWNED5\`
+count=yes" > $tmp/conf/config
+_ago_show_time=0 _ago_show_count=0; _ago_prefs_load
 [[ -e $tmp/PWNED4 || -e $tmp/PWNED5 ]] && bad "配置文件里的命令不会被执行" || ok "配置文件里的命令不会被执行"
-check "非法的值和旧的 sort 项被忽略" $_ago_show_time 0
+check "非法的值和旧的 sort 项被忽略" "$_ago_show_time $_ago_show_count" "0 0"
 
 print "删除确认"
 _ago_mode=list _ago_group=git _ago_query=; _ago_filter; _ago_sel=1

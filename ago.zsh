@@ -10,7 +10,8 @@
 #   ←           返回分组列表
 #   回车        在组里：把选中的命令放到命令行，可以继续编辑，再回车执行
 #   退格 / Del  删除选中的命令或整组（关键词为空时用退格；需要按 y 确认）
-#   Ctrl-T      显示 / 隐藏最后使用时间（会保存到 ~/.config/ago/config）
+#   Ctrl-O      显示 / 隐藏使用次数（会保存到 ~/.config/ago/config）
+#   Ctrl-T      显示 / 隐藏最后使用时间（同上）
 #   esc         取消（Ctrl-G 同样）
 #
 # 安全说明：命令文本只作为字符串处理，绝不放进 (( )) 或 eval，
@@ -25,7 +26,7 @@
 zmodload zsh/parameter zsh/datetime
 
 typeset -g _ago_dir=${${(%):-%x}:A:h}   # 本文件所在目录
-typeset -g _ago_version=0.5.0
+typeset -g _ago_version=0.6.0
 typeset -gi _ago_pending=0
 typeset -g _ago_initq=
 
@@ -42,7 +43,7 @@ typeset -ga _ago_terms _ago_rh
 typeset -g  _ago_out= _ago_today= _ago_yesterday=
 typeset -gi _ago_base=0
 typeset -g  _ago_cache_key= _ago_query= _ago_group= _ago_mode=group
-typeset -gi _ago_sel=1 _ago_top=1 _ago_rows=10 _ago_show_time=0
+typeset -gi _ago_sel=1 _ago_top=1 _ago_rows=10 _ago_show_time=0 _ago_show_count=0
 typeset -g  _ago_conf=${AGO_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/ago/config}
 typeset -g  _ago_other='(其他)'   # 取不到命令名的历史归到这一组
 typeset -ga _ago_del          # 等待确认删除的命令
@@ -247,8 +248,9 @@ _ago_mark() {
 }
 
 _ago_render() {
-  local -i n=$#_ago_hits i j f w=$(( COLUMNS - (_ago_show_time ? 21 : 11) )) gw=0
-  local cnt when name hint seg line style
+  local -i n=$#_ago_hits i j f gw=0
+  local -i w=$(( COLUMNS - 3 - (_ago_show_count ? 7 : 0) - (_ago_show_time ? 10 : 0) ))
+  local cnt cols name hint seg line style
   local -a segs
   _ago_out= _ago_rh=() _ago_base=${#BUFFER}
 
@@ -280,7 +282,7 @@ _ago_render() {
   # 列表
   for (( j = _ago_top; j < _ago_top + _ago_rows && j <= n; j++ )); do
     i=${_ago_hits[j]}
-    when= hint=
+    hint=
     if [[ $_ago_mode == group ]]; then
       cnt=${_ago_hcounts[j]} f=${_ago_hfirst[j]}
       _ago_fit "${_ago_gnames[i]}" $w; name=$REPLY
@@ -293,16 +295,19 @@ _ago_render() {
       cnt=${_ago_counts[i]} f=$i
       _ago_fit "${_ago_cmds[i]}" $w; name=$REPLY
     fi
-    if (( _ago_show_time )); then _ago_when $f; when="$REPLY  "; fi
+    # 次数和时间两列按偏好显示
+    cols=
+    (( _ago_show_count )) && cols+="${(l:5:)cnt}  "
+    if (( _ago_show_time )); then _ago_when $f; cols+="$REPLY  "; fi
     _ago_put $'\n'
     if (( j == _ago_sel )); then
       style=${_ago_st[sel]}
       [[ -n $_ago_ask ]] && style=${_ago_st[warn]}
-      _ago_put "➤ ${(l:5:)cnt}  $when" $style
+      _ago_put "➤ $cols" $style
       _ago_put "$name" $style
     else
       _ago_put '  '
-      _ago_put "${(l:5:)cnt}  $when" ${_ago_st[dim]}
+      _ago_put "$cols" ${_ago_st[dim]}
       _ago_put "$name"
     fi
     _ago_mark "$name" $(( _ago_base + ${#_ago_out} - ${#name} ))
@@ -334,7 +339,7 @@ _ago_render() {
       segs+=("← 返回" "Enter 编辑")
     fi
     (( n )) && segs+=("${${_ago_query:+Del}:-⌫} 删除")
-    segs+=("^T 时间")
+    segs+=("^O 次数" "^T 时间")
     [[ -n $_ago_query ]] && segs+=("^U 清空")
     segs+=("esc 退出")
   fi
@@ -500,7 +505,8 @@ _ago_prefs_load() {
   local k v
   while IFS='=' read -r k v; do
     case $k in
-      time) case $v in (0|1) _ago_show_time=$v ;; esac ;;
+      time)  case $v in (0|1) _ago_show_time=$v ;; esac ;;
+      count) case $v in (0|1) _ago_show_count=$v ;; esac ;;
     esac
   done < $_ago_conf
 }
@@ -508,17 +514,19 @@ _ago_prefs_load() {
 _ago_prefs_save() {
   [[ -d ${_ago_conf:h} ]] || mkdir -p -- ${_ago_conf:h} 2>/dev/null || return 0
   print -r -- "# ago 偏好设置，由 ago 自动保存
-time=$_ago_show_time" >| $_ago_conf 2>/dev/null
+time=$_ago_show_time
+count=$_ago_show_count" >| $_ago_conf 2>/dev/null
 }
 
 ago-widget() {
   local saved_buffer=$BUFFER saved_pre=$PREDISPLAY key k2 k3
-  local -i saved_cursor=$CURSOR done=0 saved_time
+  local -i saved_cursor=$CURSOR done=0
+  local saved_prefs
   local -a _ago_saved_rh=("${region_highlight[@]}")
 
   _ago_load
   _ago_prefs_load
-  saved_time=$_ago_show_time
+  saved_prefs="$_ago_show_time $_ago_show_count"
   _ago_styles
   strftime -s _ago_today '%Y%m%d' $EPOCHSECONDS
   strftime -s _ago_yesterday '%Y%m%d' $(( EPOCHSECONDS - 86400 ))
@@ -569,6 +577,7 @@ ago-widget() {
         $'\C-p') (( _ago_sel-- )) ;;
         $'\C-n') (( _ago_sel++ )) ;;
         $'\C-t') (( _ago_show_time = ! _ago_show_time )) ;;
+        $'\C-o') (( _ago_show_count = ! _ago_show_count )) ;;
         $'\r'|$'\n')
           (( $#_ago_hits )) || continue
           if [[ $_ago_mode == group ]]; then
@@ -592,7 +601,7 @@ ago-widget() {
       esac
     done
   } always {
-    (( _ago_show_time == saved_time )) || _ago_prefs_save
+    [[ "$_ago_show_time $_ago_show_count" == $saved_prefs ]] || _ago_prefs_save
     POSTDISPLAY=
     PREDISPLAY=$saved_pre
     region_highlight=("${_ago_saved_rh[@]}")
@@ -623,7 +632,7 @@ ${c}ago update${r}         更新到最新版
 ${c}ago uninstall${r}      卸载
 ${c}ago version${r}        显示版本
 
-${g}搜索界面：输入 搜索 | ↑↓ 选择 | → 进入组 | ← 返回 | Enter 编辑 | ⌫/Del 删除 | ^T 时间 | esc 退出
+${g}搜索界面：输入 搜索 | ↑↓ 选择 | → 进入组 | ← 返回 | Enter 编辑 | ⌫/Del 删除 | ^O 次数 | ^T 时间 | esc 退出
 偏好设置：$_ago_conf${r}"
 }
 
