@@ -12,7 +12,7 @@
 #   退格 / Del  删除选中的命令或整组（关键词为空时用退格；需要按 y 确认）
 #   Ctrl-O      显示 / 隐藏使用次数（会保存到 ~/.config/ago/config）
 #   Ctrl-T      显示 / 隐藏最后使用时间（同上）
-#   esc         取消（Ctrl-G 同样）
+#   ESC         取消（Ctrl-G 同样）
 #
 # 安全说明：命令文本只作为字符串处理，绝不放进 (( )) 或 eval，
 # 否则历史里的 $(...) 会被执行。
@@ -349,7 +349,7 @@ _ago_render() {
     (( n )) && segs+=("${${_ago_query:+Del}:-⌫} 删除")
     segs+=("^O 次数" "^T 时间")
     [[ -n $_ago_query ]] && segs+=("^U 清空")
-    segs+=("esc 退出")
+    segs+=("ESC 退出")
   fi
   line=
   for seg in $segs; do
@@ -639,7 +639,7 @@ ${c}ago update${r}         更新到最新版
 ${c}ago uninstall${r}      卸载
 ${c}ago version${r}        显示版本
 
-${g}搜索界面：输入 搜索 | ↑↓ 选择 | → 进入组 | ← 返回 | Enter 编辑 | ⌫/Del 删除 | ^O 次数 | ^T 时间 | esc 退出
+${g}搜索界面：输入 搜索 | ↑↓ 选择 | → 进入组 | ← 返回 | Enter 编辑 | ⌫/Del 删除 | ^O 次数 | ^T 时间 | ESC 退出
 偏好设置：$_ago_conf${r}"
 }
 

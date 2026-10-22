@@ -18,7 +18,7 @@ ago  3
 ➤ git      git push origin main
   pnpm     pnpm push:docs
   docker   docker push vvenv/app
-↑↓ 选择 | → 进入 | Del 删除 | ^O 次数 | ^T 时间 | ^U 清空 | esc 退出
+↑↓ 选择 | → 进入 | Del 删除 | ^O 次数 | ^T 时间 | ^U 清空 | ESC 退出
 ```
 
 按 → 进入 git 组：
@@ -29,7 +29,7 @@ ago  git · 3
 ➤ git push origin main
   git push --tags
   git push -f
-↑↓ 选择 | ← 返回 | Enter 编辑 | Del 删除 | ^O 次数 | ^T 时间 | ^U 清空 | esc 退出
+↑↓ 选择 | ← 返回 | Enter 编辑 | Del 删除 | ^O 次数 | ^T 时间 | ^U 清空 | ESC 退出
 ```
 
 按 `Ctrl-O` 显示使用次数，按 `Ctrl-T` 显示最后使用时间：
@@ -105,7 +105,7 @@ ago help           # 帮助
 | `退格` | 删除关键词的一个字；关键词为空时，删除选中的命令或整组 |
 | `Delete` | 删除选中的命令或整组（有关键词时也可以用） |
 | `Ctrl-U` | 清空关键词 |
-| `esc` / `Ctrl-G` | 退出，恢复原来的命令行 |
+| `ESC` / `Ctrl-G` | 退出，恢复原来的命令行 |
 
 每行显示组名或命令；打开次数显示后，分组列表里的次数是组内（匹配的）命令次数之和。多行命令用 `↵` 表示换行，选中后会还原成原来的多行。取不到命令名的历史（比如单独的 `FOO=1`）归在「(其他)」组。
 
