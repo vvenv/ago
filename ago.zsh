@@ -3,7 +3,7 @@
 # 安装：./install.sh（会在 ~/.zshrc 里加一行 source）
 # 使用：按 Ctrl-R，或输入 ago [关键词]；统计报表：ago stats
 #   输入        过滤（空格分隔多个词，先按子串匹配，再按模糊匹配）
-#   ↑ ↓         选择（也可用 Ctrl-P / Ctrl-N）
+#   ↑ ↓         选择（也可用 Ctrl-P / Ctrl-N；PgUp / PgDn 翻页）
 #   ← →         切换排序：最近 / 最远 / 最多 / 最少（也可用 Ctrl-O）
 #   回车        把选中的命令放到命令行，可以继续编辑，再回车执行
 #   Tab         切换到"按命令名分组"，选中某个命令名后只看这一组
@@ -15,17 +15,22 @@
 # 可在 source 之前设置：
 #   AGO_KEY=...    打开搜索的快捷键（默认 ^R，即 Ctrl-R）
 #   AGO_NO_BIND=1  不绑定快捷键，只用 ago 命令
+#   NO_COLOR=1     不使用颜色
 
-zmodload zsh/parameter
+zmodload zsh/parameter zsh/datetime
 
 typeset -g _ago_dir=${${(%):-%x}:A:h}   # 本文件所在目录
-typeset -g _ago_version=0.1.0
+typeset -g _ago_version=0.2.0
 typeset -gi _ago_pending=0
 typeset -g _ago_initq=
 
 typeset -ga _ago_cmds _ago_lower _ago_counts _ago_names _ago_evts
 typeset -ga _ago_gnames _ago_gcounts _ago_gfirst _ago_hits
-typeset -gA _ago_dmap   # 事件号 → 日期，懒加载缓存
+typeset -gA _ago_tmap   # 事件号 → 时间戳，懒加载缓存
+typeset -gA _ago_st     # 界面样式
+typeset -ga _ago_terms _ago_rh
+typeset -g  _ago_out= _ago_today= _ago_yesterday=
+typeset -gi _ago_base=0
 typeset -ga _ago_most _ago_least _ago_gmost _ago_gleast
 typeset -ga _ago_sorts=(recent oldest most least)
 typeset -gA _ago_sort_label=(recent 最近 oldest 最远 most 最多 least 最少)
@@ -138,6 +143,7 @@ _ago_filter() {
   local -a terms sub fuz reply
   local t ch pat i ok
   terms=(${=${(L)_ago_query}})
+  _ago_terms=($terms)
   _ago_hits=()
   _ago_sel=1 _ago_top=1
   _ago_order
@@ -186,63 +192,147 @@ _ago_fit() {
   REPLY=$s
 }
 
-# 第 $1 条命令最后一次使用的日期，放在 REPLY。只查屏幕上显示的行，查过就缓存
-_ago_date() {
-  local -i e=${_ago_evts[$1]}
-  local line
+# 第 $1 条命令最后一次使用的相对时间（今天 / 3天前 / 2个月前），放在 REPLY，补齐到 8 列。
+# 只查屏幕上显示的行，查过就缓存
+_ago_when() {
+  local -i e=${_ago_evts[$1]} t d
+  local line day
   local -a w
-  if [[ -z ${_ago_dmap[$e]} ]]; then
-    line="$(fc -lt '%y-%m-%d' $e $e 2>/dev/null)"
+  if [[ -z ${_ago_tmap[$e]} ]]; then
+    line="$(fc -lt '%s' $e $e 2>/dev/null)"
     line=${line%%$'\n'*}
-    w=(${=line[1,40]})   # 只取 "事件号 日期" 两个字段
-    [[ ${w[2]} == <->-<->-<-> ]] && _ago_dmap[$e]=${w[2]} || _ago_dmap[$e]='--------'
+    w=(${=line[1,40]})   # 只取 "事件号 时间戳" 两个字段
+    [[ ${w[2]} == <-> ]] && _ago_tmap[$e]=${w[2]} || _ago_tmap[$e]=0
   fi
-  REPLY=${_ago_dmap[$e]}
+  t=${_ago_tmap[$e]}
+  if (( t == 0 )); then
+    REPLY=
+  else
+    strftime -s day '%Y%m%d' $t
+    d=$(( (EPOCHSECONDS - t) / 86400 ))
+    if   [[ $day == $_ago_today ]];     then REPLY=今天
+    elif [[ $day == $_ago_yesterday ]]; then REPLY=昨天
+    elif (( d < 7 ));   then REPLY="$(( d > 1 ? d : 2 ))天前"
+    elif (( d < 30 ));  then REPLY="$(( d / 7 ))周前"
+    elif (( d < 365 )); then REPLY="$(( d / 30 ))个月前"
+    else                     REPLY="$(( d / 365 ))年前"
+    fi
+  fi
+  while (( ${(m)#REPLY} < 8 )); do REPLY+=' '; done
+}
+
+# 颜色。设置 NO_COLOR 时只用反色和下划线
+_ago_styles() {
+  if [[ -n $NO_COLOR ]]; then
+    _ago_st=(brand bold dim '' sel standout match underline prompt bold)
+  else
+    _ago_st=(brand 'fg=magenta,bold' dim 'fg=8' sel 'fg=cyan,bold' match 'fg=yellow,bold' prompt 'fg=yellow')
+  fi
+}
+
+# 往界面追加一段文字，$2 是样式（可为空）。位置按字符计，从 BUFFER 开头算起
+_ago_put() {
+  [[ -n $2 ]] && _ago_rh+=("$(( _ago_base + ${#_ago_out} )) $(( _ago_base + ${#_ago_out} + ${#1} )) $2")
+  _ago_out+=$1
+}
+
+# 高亮文本 $1 里命中关键词的位置，$2 是这段文本在界面中的起始位置
+_ago_mark() {
+  [[ -n ${_ago_st[match]} ]] || return
+  local s=${(L)1} t ch
+  local -i p q k len=${#1}
+  for t in $_ago_terms; do
+    p=${s[(i)${(b)t}]}
+    if (( p <= len )); then
+      while (( p <= len )); do
+        _ago_rh+=("$(( $2 + p - 1 )) $(( $2 + p - 1 + ${#t} )) ${_ago_st[match]}")
+        p=${s[(ib:p+${#t}:)${(b)t}]}
+      done
+    else
+      # 模糊匹配：依次找每个字符
+      q=1
+      for ch in ${(s::)t}; do
+        k=${s[(ib:q:)${(b)ch}]}
+        (( k > len )) && break
+        _ago_rh+=("$(( $2 + k - 1 )) $(( $2 + k )) ${_ago_st[match]}")
+        q=k+1
+      done
+    fi
+  done
 }
 
 _ago_render() {
-  local -a lines
   local -i n=$#_ago_hits i j w=$(( COLUMNS - 21 ))
-  local head line mark date
+  local label=${_ago_sort_label[$_ago_sort]} cnt when name style seg line
+  local -a segs
+  _ago_out= _ago_rh=() _ago_base=${#BUFFER}
 
   (( _ago_sel > n )) && _ago_sel=n
   (( _ago_sel < 1 )) && _ago_sel=1
   (( _ago_sel < _ago_top )) && _ago_top=_ago_sel
   (( _ago_sel >= _ago_top + _ago_rows )) && _ago_top=$(( _ago_sel - _ago_rows + 1 ))
 
+  # 标题行
+  _ago_put $'\n'
+  _ago_put ago ${_ago_st[brand]}
   if [[ $_ago_mode == group ]]; then
-    head="  按命令名分组  $n 个"
+    _ago_put "  命令分组 · $n 个 · $label" ${_ago_st[dim]}
   elif [[ -n $_ago_group ]]; then
-    head="  [$_ago_group]  $n 条   退格可回到全部"
+    _ago_put '  '
+    _ago_put "$_ago_group" ${_ago_st[sel]}
+    _ago_put " · $n 条 · $label" ${_ago_st[dim]}
   else
-    head="  $n/$#_ago_cmds 条"
+    _ago_put "  $n/$#_ago_cmds 条 · $label" ${_ago_st[dim]}
   fi
-  head+="   排序:${_ago_sort_label[$_ago_sort]}   ↑↓选择 ←→排序 回车确定 Tab分组 Esc取消"
-  _ago_fit "$head" $(( COLUMNS - 1 ))
-  lines=("$REPLY")
 
-  local -i hl_start=-1 hl_end=-1 pos=$(( ${#BUFFER} + 1 + ${#lines[1]} + 1 ))
+  # 列表
   for (( j = _ago_top; j < _ago_top + _ago_rows && j <= n; j++ )); do
     i=${_ago_hits[j]}
-    if (( j == _ago_sel )); then mark='▶'; else mark=' '; fi
     if [[ $_ago_mode == group ]]; then
-      _ago_date ${_ago_gfirst[i]}; date=$REPLY
-      _ago_fit "${_ago_gnames[i]}" $w
-      line="$mark ${(l:6:)_ago_gcounts[i]}  $date  $REPLY"
+      cnt=${_ago_gcounts[i]}; _ago_when ${_ago_gfirst[i]}; when=$REPLY; name=${_ago_gnames[i]}
     else
-      _ago_date $i; date=$REPLY
-      _ago_fit "${_ago_cmds[i]}" $w
-      line="$mark ${(l:6:)_ago_counts[i]}  $date  $REPLY"
+      cnt=${_ago_counts[i]}; _ago_when $i; when=$REPLY; name=${_ago_cmds[i]}
     fi
-    (( j == _ago_sel )) && { hl_start=$pos; hl_end=$(( pos + ${#line} )) }
-    pos+=$(( ${#line} + 1 ))
-    lines+=("$line")
+    _ago_fit "$name" $w; name=$REPLY
+    _ago_put $'\n'
+    if (( j == _ago_sel )); then
+      _ago_put "➤ ${(l:5:)cnt}  $when  " ${_ago_st[sel]}
+      _ago_put "$name" ${_ago_st[sel]}
+    else
+      _ago_put '  '
+      _ago_put "${(l:5:)cnt}  $when  " ${_ago_st[dim]}
+      _ago_put "$name"
+    fi
+    _ago_mark "$name" $(( _ago_base + ${#_ago_out} - ${#name} ))
   done
-  (( n == 0 )) && lines+=("  （没有匹配的命令）")
+  if (( n == 0 )); then
+    _ago_put $'\n'
+    _ago_put "  没有匹配的命令" ${_ago_st[dim]}
+  fi
 
-  POSTDISPLAY=$'\n'"${(pj:\n:)lines}"
-  region_highlight=("${_ago_saved_rh[@]}" "$(( ${#BUFFER} + 1 )) $(( ${#BUFFER} + 1 + ${#lines[1]} )) fg=8")
-  (( hl_start >= 0 )) && region_highlight+=("$hl_start $hl_end standout")
+  # 底部按键提示：随状态变化，宽度不够时在分隔符处换行
+  (( n > _ago_rows )) && segs+=("$_ago_sel/$n")
+  segs+=("↑↓ 选择" "←→ 排序")
+  if [[ $_ago_mode == group ]]; then
+    segs+=("Enter 进入" "Tab 返回")
+  else
+    segs+=("Enter 编辑" "Tab 分组")
+    [[ -n $_ago_group && -z $_ago_query ]] && segs+=("⌫ 全部")
+  fi
+  [[ -n $_ago_query ]] && segs+=("^U 清空")
+  segs+=("Esc 退出")
+  line=
+  for seg in $segs; do
+    if [[ -n $line ]] && (( ${(m)#line} + 3 + ${(m)#seg} > COLUMNS - 1 )); then
+      _ago_put $'\n'; _ago_put "$line" ${_ago_st[dim]}
+      line=
+    fi
+    line+=${line:+ | }$seg
+  done
+  _ago_put $'\n'; _ago_put "$line" ${_ago_st[dim]}
+
+  POSTDISPLAY=$_ago_out
+  region_highlight=("${_ago_saved_rh[@]}" "P0 ${#PREDISPLAY} ${_ago_st[prompt]}" "${_ago_rh[@]}")
 }
 
 # 循环切换排序方式：$1 为 1 或 -1
@@ -254,17 +344,21 @@ _ago_cycle_sort() {
 }
 
 ago-widget() {
-  local saved_buffer=$BUFFER key k2 k3
+  local saved_buffer=$BUFFER saved_pre=$PREDISPLAY key k2 k3
   local -i saved_cursor=$CURSOR done=0
   local -a _ago_saved_rh=("${region_highlight[@]}")
 
   _ago_load
+  _ago_styles
+  strftime -s _ago_today '%Y%m%d' $EPOCHSECONDS
+  strftime -s _ago_yesterday '%Y%m%d' $(( EPOCHSECONDS - 86400 ))
   _ago_query=${_ago_initq:-$BUFFER} _ago_group= _ago_mode=list
   _ago_initq=
-  _ago_rows=$(( LINES / 2 - 2 ))
-  (( _ago_rows > 12 )) && _ago_rows=12
+  _ago_rows=$(( LINES / 2 - 3 ))
+  (( _ago_rows > 10 )) && _ago_rows=10
   (( _ago_rows < 3 )) && _ago_rows=3
   _ago_filter
+  PREDISPLAY="搜索 › "
 
   {
     while (( ! done )); do
@@ -282,6 +376,8 @@ ago-widget() {
               B) (( _ago_sel++ )) ;;
               C) _ago_cycle_sort 1 ;;
               D) _ago_cycle_sort -1 ;;
+              5) read -k k2; (( _ago_sel -= _ago_rows )) ;;   # PgUp
+              6) read -k k2; (( _ago_sel += _ago_rows )) ;;   # PgDn
             esac
           else
             BUFFER=$saved_buffer CURSOR=$saved_cursor done=1
@@ -320,6 +416,7 @@ ago-widget() {
     done
   } always {
     POSTDISPLAY=
+    PREDISPLAY=$saved_pre
     region_highlight=("${_ago_saved_rh[@]}")
     zle -R
   }
@@ -336,23 +433,45 @@ _ago_line_init() {
 autoload -Uz add-zle-hook-widget
 add-zle-hook-widget line-init _ago_line_init
 
+_ago_help() {
+  local b=$'\e[1;35m' g=$'\e[90m' c=$'\e[36m' r=$'\e[0m'
+  [[ -n $NO_COLOR || ! -t 1 ]] && b= g= c= r=
+  print -r -- "${b}ago${r} ${g}$_ago_version · 找回以前用过的命令${r}
+
+${c}ago${r} [关键词]       打开搜索（也可以直接按 ${AGO_KEY:-^R}）
+${c}ago stats${r} [选项]   最常用命令统计，按命令名分组
+                   ${g}-n 前N个命令  -k 每组K条  -d 最近N天  -g 只看某个命令${r}
+${c}ago update${r}         更新到最新版
+${c}ago uninstall${r}      卸载
+${c}ago version${r}        显示版本
+
+${g}搜索界面：输入 过滤 | ↑↓ 选择 | ←→ 排序 | Tab 分组 | Enter 编辑 | Esc 退出${r}"
+}
+
 ago() {
   case $1 in
     stats)
       shift
       zsh "$_ago_dir/ago-stats.zsh" -f "${HISTFILE:-$HOME/.zsh_history}" "$@" ;;
+    update|upgrade)
+      if [[ ! -d $_ago_dir/.git ]]; then
+        print -u2 "ago: $_ago_dir 不是 git 仓库，请重新运行安装命令来更新"
+        return 1
+      fi
+      local old=$_ago_version
+      git -C "$_ago_dir" pull --ff-only -q || return
+      source "$_ago_dir/ago.zsh"
+      if [[ $old == $_ago_version ]]; then
+        print -r -- "ago 已是最新版 $_ago_version"
+      else
+        print -r -- "ago 已从 $old 更新到 $_ago_version"
+      fi ;;
+    uninstall|remove)
+      sh "$_ago_dir/install.sh" --uninstall || return
+      bindkey "${AGO_KEY:-^R}" history-incremental-search-backward
+      unfunction ago ;;
     -h|--help|help)
-      print -r -- "ago $_ago_version — zsh 历史命令搜索
-
-用法:
-  ago [关键词]     打开搜索（也可以直接按 ${AGO_KEY:-^R}）
-  ago stats [选项] 最常用命令统计，按命令名分组
-                   -n 前N个命令  -k 每组K条  -d 最近N天  -g 只看某个命令
-  ago version      显示版本
-
-搜索界面:
-  输入 过滤   ↑↓ 选择   ←→ 排序(最近/最远/最多/最少)
-  Tab 按命令名分组   回车 放到命令行编辑   Esc 取消" ;;
+      _ago_help ;;
     -v|--version|version)
       print -r -- "ago $_ago_version" ;;
     *)
@@ -360,5 +479,22 @@ ago() {
       _ago_pending=1 ;;
   esac
 }
+
+# Tab 补全子命令
+_ago_complete() {
+  local -a subs=(
+    'stats:最常用命令统计'
+    'update:更新到最新版'
+    'uninstall:卸载'
+    'help:显示帮助'
+    'version:显示版本'
+  )
+  if (( CURRENT == 2 )); then
+    _describe 'ago 子命令' subs
+  elif [[ ${words[2]} == stats ]]; then
+    _arguments '-n[前 N 个命令]:N' '-k[每组 K 条]:K' '-d[最近 N 天]:天数' '-g[只看某个命令]:命令' '-f[历史文件]:文件:_files'
+  fi
+}
+(( $+functions[compdef] )) && compdef _ago_complete ago
 
 [[ -n $AGO_NO_BIND ]] || bindkey "${AGO_KEY:-^R}" ago-widget
